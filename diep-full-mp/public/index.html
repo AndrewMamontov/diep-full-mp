@@ -678,6 +678,72 @@
 
     </style>
 <script src="/socket.io/socket.io.js"></script>
+    <!-- === MULTIPLAYER ADAPTER  ---------------------------------------- -->
+<script src="/socket.io/socket.io.js"></script>
+<script>
+/* 1.  подключаемся к серверу */
+const socket   = io();
+let   selfId   = null;
+let   netWorld = null;     // authoritative world от сервера
+
+socket.on("init",  d => { selfId = d.selfId; netWorld = d.world; });
+socket.on("snapshot", w => netWorld = w);
+
+/* 2.  глушим ВСЮ локальную физику  ---------------------------------- */
+window.updateGameObjects = ()=>{};          // формы, мобы, пули
+window.generateShapes     = ()=>{};         // чтобы restartGame не пересоздавал
+window.spawnMob           = ()=>{};
+window.restartGame        = ()=>{           // респаун через сервер
+  socket.emit("respawn");
+};
+
+/* 3.  собираем ввод и отправляем каждые 16 мс ----------------------- */
+const inputState = {};     // {w,a,s,d,mouseA}
+window.addEventListener("keydown",e=>inputState[e.key.toLowerCase()]=true);
+window.addEventListener("keyup",  e=>inputState[e.key.toLowerCase()]=false);
+
+const canvas = document.getElementById("gameCanvas");
+canvas.addEventListener("mousemove",e=>{
+  const r=canvas.getBoundingClientRect();
+  inputState.mouseA = Math.atan2(e.clientY-r.top-360,e.clientX-r.left-640);
+});
+setInterval(()=> socket.emit("input", inputState), 16);
+
+canvas.addEventListener("mousedown",()=> socket.emit("shoot", inputState.mouseA));
+
+/* 4.  заменяем массивы на сетевые ---------------------------------- */
+let dummy = [];                    // пустая заглушка
+Object.defineProperties(window,{
+  shapes : {get:()=> netWorld?.shapes || dummy},
+  mobs   : {get:()=> netWorld?.mobs   || dummy},
+  playerBullets:{get:()=> netWorld?.bullets || dummy}
+});
+
+/* 5.  отрисовка: берём данные из netWorld --------------------------- */
+const originalDrawEverything = window.drawEverything || window.gameLoop;
+window.drawEverything = function(){
+  if(!netWorld){ requestAnimationFrame(window.drawEverything); return; }
+  // your original canvas clearing...
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  // --- формы ---
+  netWorld.shapes.forEach(s=>{
+    ctx.fillStyle = ({square:"#ffeb3b",triangle:"#f44336",pentagon:"#3f51b5"})[s.type];
+    ctx.beginPath(); ctx.arc(s.x,s.y,s.size,0,Math.PI*2); ctx.fill();
+  });
+  // --- пули ---
+  netWorld.bullets.forEach(b=>{
+    ctx.fillStyle="#fff"; ctx.beginPath(); ctx.arc(b.x,b.y,4,0,Math.PI*2); ctx.fill();
+  });
+  // --- игроки ---
+  Object.values(netWorld.players).forEach(p=>{
+    drawTank(p, p.id===selfId ? "#00e0ff" : "#18ffff");
+  });
+  requestAnimationFrame(window.drawEverything);
+};
+window.drawEverything();   // запускаем новый цикл
+</script>
+<!-- === END MULTIPLAYER ADAPTER  ------------------------------------ -->
 </head>
 <body>
     <canvas id="gameCanvas"></canvas>
